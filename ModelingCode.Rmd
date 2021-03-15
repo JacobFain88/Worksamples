@@ -1,0 +1,862 @@
+---
+title: "SABR Diamond Dollars Case Competition Modeling"
+author: "Jacob Fain"
+date: "3/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,include=FALSE}
+#To download the baseballr package
+#devtools::install_github("BillPetti/baseballr")
+```
+
+```{r,warning=FALSE,include=FALSE}
+library(baseballr)
+require(readr)
+require(dplyr)
+require(xml2)
+require(magrittr)
+library(stringi)
+library(xgboost)
+library(Matrix)
+library(caret)
+library(gamlr)
+library(glmnet)
+library(ranger)
+library(ggplot2)
+library(gt)
+library(webshot)
+library(ggthemes)
+```
+
+# Data Wrangling
+
+Load in 2019 starting pitching performance data provided by SABR. Create a dataframe of game dates to be used with `baseballr` package to scrape pitch-by-pitch statcast data for the 2019 season from [https://baseballsavant.mlb.com/]. Because baseball savant will only allow queries to scrape 40,000 rows of data at a time, we scrape for 10 days at a time into seperate data sets and combine the data
+
+```{r,include=FALSE}
+#dates for 2019 season
+sabr<-read.csv("sabr.csv",header=T)
+x2019season<-sabr %>% filter(substr(Game.Date,1,4)==2019) %>% select(Game.Date) %>% distinct(Game.Date) %>% mutate(start_date=Game.Date,end_date=Game.Date) %>% arrange(Game.Date) 
+```
+
+```{r}
+#calculate game scores
+sabr<-sabr %>% group_by(Pitcher.ID,Game.Date)%>% mutate(
+  gs1=50+Outs+2*(floor(Outs/3)-4)+Strikeouts-2*sum(Singles,Doubles,Triples,HRs)-4*Earned.Runs-2*(Runs-Earned.Runs)-Walks,
+  gs2=40+2*Outs+Strikeouts-2*Walks-2*sum(Singles,Doubles,Triples,HRs)-3*Runs-6*HRs) %>% ungroup()
+```
+
+## Scraping statcast data
+
+Because baseballsavant will only allow queries to scrape 40,000 rows of data at a time, we scrape for 10 game dates at a time into separate data sets and combine the data
+```{r eval=FALSE}
+##DO NOT RUN
+
+x2019.1<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[1],end_date = .$end_date[10]))
+
+x2019.2<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[11],end_date = .$end_date[20]))
+
+x2019.3<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[21],end_date = .$end_date[30]))
+
+x2019.4<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[31],end_date = .$end_date[40]))
+
+x2019.5<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[41],end_date = .$end_date[50]))
+
+x2019.6<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[51],end_date = .$end_date[60]))
+
+x2019.7<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[61],end_date = .$end_date[70]))
+
+x2019.8<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[71],end_date = .$end_date[80]))
+
+x2019.9<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[81],end_date = .$end_date[90]))
+
+x2019.10<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[91],end_date = .$end_date[100]))
+
+x2019.11<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[101],end_date = .$end_date[110]))
+
+x2019.12<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[111],end_date = .$end_date[120]))
+
+x2019.13<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[121],end_date = .$end_date[130]))
+
+x2019.14<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[131],end_date = .$end_date[140]))
+
+x2019.15<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[141],end_date = .$end_date[150]))
+
+x2019.16<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[151],end_date = .$end_date[160]))
+
+x2019.17<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[161],end_date = .$end_date[170]))
+
+x2019.18<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[171],end_date = .$end_date[180]))
+
+x2019.19<-x2019season %>% do(scrape_statcast_savant_pitcher_all(
+  start_date=.$start_date[181],end_date = .$end_date[185]))
+```
+
+
+```{r eval=FALSE}
+##DO NOT RUNa
+full.data<-rbind(x2019.1,x2019.2,x2019.3,x2019.4,x2019.5,x2019.6,x2019.7,x2019.8, x2019.9,x2019.10,x2019.11,x2019.12,x2019.13,x2019.14,x2019.15,x2019.16,x2019.17,x2019.18,x2019.19)
+
+write.csv(full.data,file="sabr.full.data.cvs")
+```
+
+
+
+```{r,include=FALSE}
+full.data<-read.csv("sabr.full.data.cvs")
+```
+
+## Data cleansing
+
+Replace NA values for key indicator variables with zeros. 
+```{r}
+full.data$on_3b[is.na(full.data$on_3b)]=0
+full.data$on_2b[is.na(full.data$on_2b)]=0
+full.data$on_1b[is.na(full.data$on_1b)]=0
+full.data$launch_angle[is.na(full.data$launch_angle)]=0
+full.data$launch_speed[is.na(full.data$launch_speed)]=0
+full.data$zone[is.na(full.data$zone)]=0
+```
+
+Add flags for hits with a high probability of being a home run based on launch angle and exit velocity (`high.hr.prob.launc` and `high.hr.prob.exitvelo`), first pitch strikes, strikes when pitcher is facing a one-one count, instances when a pitcher is facing a high leverage situation (runner in scoring position with less than 2 outs; `high_levg_sit`), flags for different pitch strike zone designations (in the zone, on a corner, in the center of the plate, up in the zone, chases, and good takes).
+```{r}
+full.data<-full.data %>% mutate(
+  high.hr.prob.launch=if_else(launch_angle>=22 & launch_angle<38,1,0),
+  high.hr.prob.exitvelo = if_else(launch_speed>100,1,0),
+  first_pitch_strike = if_else((balls==0 & strikes == 0) &
+  (description == "called_strike" |description == "swinging_strike" |
+     description == "foul"|description=="foul_tip"),1,0),
+  first_pitches =  if_else(balls==0 & strikes == 0,1,0),
+  one_one_strike = if_else((balls==1 & strikes == 1) & 
+                             (description == "called_strike" |
+                                description == "swinging_strike" |
+                                description =="foul"|
+                                description=="foul_tip"),1,0),
+  one_one_counts = if_else(balls==1 & strikes == 1,1,0),
+  high_levg_sit = if_else((on_2b>0 | on_3b>0) & 
+                            outs_when_up<2 & events!="null" ,1,0),
+  pitch_type=as.factor(pitch_type),
+  meatball = if_else(zone==5,1,0),
+  in_zone = if_else(zone>=1 & zone <11,1,0),
+  corners = if_else(zone == 1 | zone == 3|zone==7|zone==9,1,0),
+  up_in_zone = if_else(zone>=1 & zone<4,1,0),
+  chases = if_else(zone>10 & (description=="swinging_strike"|
+                                description=="foul"|
+                                description=="foul_tip"),1,0),
+  good_takes = if_else(description == "ball" & in_zone==0,1,0)
+)
+```
+
+
+Create a variable to indicate if there is statcast data available for a given pitch. If there is no data flag as $1$, if there is data mark as $0$.
+```{r}
+#variable to signify if there is no statcast data
+full.data<-full.data %>% mutate(no_statcast=if_else((pitch_type=="null" & launch_speed==0 & (description == "foul" | description == "hit_into_play"))|(pitch_type=="null"& zone<1),1,0))
+```
+
+
+Summarize the data into game level data, counting the number of times the various events occured during a single pitcher performance.
+```{r}
+full.data.summary<-full.data %>% 
+  group_by(game_date,player_name,pitcher) %>% 
+  summarize(high.prob.hr.launch = sum(high.hr.prob.launch,na.rm=TRUE),
+            high.prob.hr.exitvelo =sum(high.hr.prob.exitvelo,na.rm=TRUE),
+            first_pitch_strike = sum(first_pitch_strike,na.rm=TRUE),
+            first_pitches = sum(first_pitches,na.rm=TRUE),
+            one_one_strike = sum(one_one_strike,na.rm=TRUE),
+            one_one_counts = sum(one_one_counts,na.rm=TRUE),
+            high_levg_sit = sum(high_levg_sit,na.rm=TRUE),
+            barrels = sum(barrel),
+            statcast_data=sum(no_statcast)/n(),
+            pitches=n(),
+            chases=sum(chases),
+            meatballs=sum(meatball),
+            in_zone=sum(in_zone),
+            corners=sum(corners),
+            up_in_zone=sum(up_in_zone),
+            takes = sum(good_takes,na.rm=TRUE)) %>% 
+  mutate(first_pitch_strike_rte=first_pitch_strike/first_pitches,
+         one_one_strike_rte=one_one_strike/one_one_counts,
+         player_name=stri_trans_general(player_name,"Latin-ASCII"),
+         chase_rte=chases/pitches,
+         meatball_rte=meatballs/pitches,
+         in_zone_rte=in_zone/pitches,
+         up_in_zone_rte=up_in_zone/pitches,
+         out_of_zone = pitches - in_zone)
+```
+
+
+```{r}
+head(full.data.summary,10)
+```
+
+Create a player name column in the data provided by SABR that matches the player naming convention used by statcast.
+```{r}
+sabr<-sabr %>% mutate(player_name=paste0(Name.Last,", ",Name.First),
+third_time_order=if_else(Batters.Faced>18,Batters.Faced-18,0),
+whiff_rate=Swing...Miss/(Swing...Miss+Fouls+Hit.into.Play),
+strikeout_rate=Strikeouts/Batters.Faced)
+```
+
+Combine the conventional game statistics provided by SABR with the statcast data summarized at the game level using the `left_join` function so that all rows from the SABR provided dataset are leftover.
+```{r}
+combined_data<-left_join(sabr,full.data.summary,by=c("Pitcher.ID"="pitcher","Game.Date"="game_date"))
+```
+
+```{r,include=FALSE}
+#one starting pitching performance didn't have matching statcast data 
+combined_data %>% filter(is.na(one_one_counts))
+```
+
+Examine rows with missing statcast data, only 44 of the 4,860 starting pitching performances have more than 25% of the pitches missing statcast data. Filter these out of the dataset and create a data set for modeling. Only the variables that made the final model are selected. 
+```{r}
+# 44 starting performances from the data set do not have statcast data
+combined_data %>% filter(statcast_data>=.25) 
+```
+
+```{r}
+combined_data<-combined_data %>% mutate(balls_in_air=FlyBalls+Line.Drives)
+
+#cleaning up the data for modeling
+mod.data<-combined_data %>% filter(statcast_data<=.25) %>% 
+  mutate(high.prob.hr.launch.rte=high.prob.hr.launch/Pitches,
+         high.prob.hr.exitvelo.rte=high.prob.hr.exitvelo/Pitches,
+         strike.swinging.rte = Swing...Miss/Pitches,
+         fly.ball.rte = FlyBalls/Hit.into.Play,
+         ground.ball.rte = Ground.Balls/Hit.into.Play) %>% 
+  select(Fouls,Swing...Miss,third_time_order,Strikeouts,
+         high.prob.hr.launch,Walks,
+         high.prob.hr.exitvelo,
+         chases,in_zone,corners,one_one_strike,
+         first_pitch_strike,high_levg_sit,barrels,Runs)
+```
+
+
+
+```{r}
+summary(mod.data)
+```
+
+# Modeling
+
+In order to determine which variables to use in our scoring metric, we fit three machine learning models all using the data to predict runs. Using cross validation, we tuned the models and recorded the variable importance and the test error as defined as the root mean squared error (RMSE).
+
+```{r}
+#train index
+inTrain<-createDataPartition(
+  y=mod.data$Runs,
+  p=.7,
+  list = FALSE)
+
+#split data into training and testing
+train.df<-mod.data[inTrain,]
+test.df<-mod.data[-inTrain,]
+
+#create matricies for boosting
+X.train = sparse.model.matrix(Runs~.,data=train.df)[,-1]
+X.test = sparse.model.matrix(Runs~.,data=test.df)[,-1]
+
+Y.train = train.df$Runs
+Y.test = test.df$Runs
+```
+
+## Ridge Regression
+
+Ran a ridge regression using cross validation. Select models with $\lambda$ set to minimize mean squared error (MSE) and to the point that MSE is equal to the minMSE + 1 standard error. Both sets of coefficients for the selected model are reported below. The two variables with the largest coefficients for predicting runs are barrels and high leverage situations.
+
+```{r}
+ridge.cv<-cv.glmnet(X.train,Y.train,alpha=0)
+```
+
+```{r}
+coef(ridge.cv,s=c(ridge.cv$lambda.min,ridge.cv$lambda.1se))
+```
+
+Make predictions using the coefficient with $\lambda$ set to the point with the minMSE + 1 standard error from cross validation. Calculate the test RMSE. The test RMSE for the final model is reported below.
+```{r}
+ridge.preds<-predict(ridge.cv,newx=X.test,s=ridge.cv$lambda.1se)
+sqrt(var(Y.test-ridge.preds))
+```
+
+
+## Random Forest
+
+For the random forest model we used the `ranger` package. We tuned a random forest model and select the optimal parameters based on the minimum RMSE using 5-fold cross validation.
+
+```{r}
+rf.grid<-expand.grid(
+  mtry = seq(4,10,2),
+  node_size = c(25,50,100,150,200),
+  sample_size = c(.5,.65,.8),
+  oob_RMSE = 0
+)
+```
+
+
+```{r}
+for(i in 1:nrow(rf.grid)){
+  tune.rf<-ranger(
+    formula = Runs ~.,
+    data = train.df,
+    num.trees = 1000,
+    mtry = rf.grid$mtry[i],
+    min.node.size = rf.grid$node_size[i],
+    sample.fraction = rf.grid$sample_size[i],
+    seed = 88
+  )
+  
+  rf.grid$oob_RMSE<-sqrt(tune.rf$prediction.error)
+  
+}
+```
+
+```{r}
+oo.rf<-rf.grid %>% arrange(oob_RMSE) %>% head(10)
+oo.rf
+```
+
+```{r}
+rf.fit<-ranger(
+  formula = Runs~.,
+  data = train.df,
+  num.trees = 1000,
+  mtry = oo.rf[1,]$mtry,
+  min.node.size = oo.rf[1,]$node_size,
+  sample.fraction = oo.rf[1,]$sample_size,
+  importance = 'impurity'
+)
+```
+
+
+Made predicitions based on the parameters of the optimal random forest model and calculate the test error. The test RMSE for the final model is reported below.
+```{r}
+yhat.rf<-predict(rf.fit,data=test.df)$predictions
+sqrt(var(test.df$Runs-yhat.rf))
+```
+
+The variable importances for the final Random Forest model are reported below. Similar to the ridge regression, `barrels` and `high_levg_sit` are the most important when predicting the number of runs that will be allowed by a starting pitcher. 
+```{r}
+tvimp<-importance(rf.fit)
+tvimp
+```
+
+
+## Boosting
+
+Using the `xgBoost` package we tuned a boosted tree model using cross validation. The parameters of the boosted model with the minRMSE from cross validation were used to fit a final boosted tree model.
+
+```{r}
+#create grid for tuning
+grid.boost<-expand.grid(
+  shrinkage = c(.01,.05,.1,.3),
+  interaction.depth = c(1,3,5,7),
+  n.minobsinnode = c(10,30,50),
+  bag.fraction = c(.5,.65,.8),
+  optimal_trees = 0,
+  min_RMSE = 0
+)
+```
+
+```{r}
+for(i in 1:nrow(grid.boost)){
+  
+  params<-list(
+    eta = grid.boost$shrinkage[i],
+    max_depth = grid.boost$interaction.depth[i],
+    min_child_weight = grid.boost$n.minobsinnode[i],
+    subsample = grid.boost$bag.fraction[i]
+  )
+  
+  set.seed(88)
+  
+  xgb.tune<-xgb.cv(
+    params = params,
+    data = X.train,
+    label = Y.train,
+    nrounds = 3000,
+    nfold = 5,
+    objective = "reg:squarederror",
+    verbose = 0,
+    early_stopping_rounds = 10
+  )
+  grid.boost$optimal_trees[i]<-which.min(
+    xgb.tune$evaluation_log$test_rmse_mean)
+  grid.boost$min_RMSE[i]<-min(
+    xgb.tune$evaluation_log$test_rmse_mean
+  )
+}
+```
+
+```{r}
+oo<-grid.boost %>% arrange(min_RMSE) %>% head(10)
+oo
+```
+
+```{r}
+#fit optimal model
+params<-list(
+  eta = oo[1,]$shrinkage,
+  max_depth = oo[1,]$interaction.depth,
+  min_child_weight = oo[1,]$n.minobsinnode,
+  subsample = oo[1,]$bag.fraction
+)
+
+xgb.fit<-xgboost(
+  params = params,
+  data = X.train,
+  label = Y.train,
+  nrounds = oo[1,]$optimal_trees,
+  objective = "reg:squarederror",
+  verbose = 0
+)
+```
+
+The variable importances for predicitng runs using the xgBoost model are presented in the graph below. Consistent with out prior 2 models, `barrels` and `high_levg_sit` are the most important variables when predicting runs.
+
+```{r}
+#importance matrix
+importance_matrix<- xgb.importance(model=xgb.fit)
+
+xgb.plot.importance(importance_matrix,top_n = 20, measure = "Gain")
+```
+```{r}
+importance_matrix
+```
+
+Made predictions using the optimal boosted model as determined by cross valiation and report the test RMSE. The RMSE for all models are reported below. The orginal model relied heavily on percentage rates, such as the percentage of pitches that led that had a exit velocity with the high probabilty of hitting a home run. However, after consideration of the best methodology for calculating gamescore, we decided to switch to counting stats that would count the number of times a given event happened during a game. 
+
+We also made our best effort to remove variables that were impacted by factors outside of the pitcher-batter exchange. For this reason, strikes, balls, hits, homeruns and walks were removed from or not included in our model.
+
+The RMSE for the various iterations of the modelas well as a log of changes are reported below.
+
+```{r}
+yhat.xgb<-predict(xgb.fit, newdata = X.test)
+sqrt(var(Y.test-yhat.xgb))
+```
+
+first model 
+RMSE = 1.739289
+
+change log:
+remove: pitches 
+add: swing and miss rate, barrels, ground ball rate, fly ball rate 
+
+second model 
+RMSE = 1.584971
+
+change log:
+switch rates to counting stats; add corners 
+
+third model
+RMSE = 1.657182
+
+change log:
+add pitches back
+
+fourth model:
+RMSE = 1.577758
+
+change log: 
+remove strikes, balls and walks in favor of stats on takes outside the zone, swing and miss, and fouls. Try to remove a lot of umpire dependence
+
+fifth model:
+RMSE = 1.608157
+
+change log:
+update chases to not include hits
+remove pitches, remove up in the zone, takes outside the zone and meatballs 
+
+sixth model 
+RMSE = 1.564968
+
+## Determining weights
+
+The baseline score that will be applied to our overall gamescore will be allocated to each of the four tools based on the variables' within each tool's relative importance from the boosted model. The weights to be applied are reported below.
+
+```{r,message=FALSE}
+importance_matrix<-as.data.frame(importance_matrix)
+importance_matrix<-importance_matrix %>% 
+  mutate(tool=ifelse(Feature == "barrels"|
+                       Feature == "high.prob.hr.exitvelo"|
+                       Feature == "high.prob.hr.launch"|
+                       Feature == "Fouls",1,
+                     ifelse(Feature == "Walks"|Feature=="in_zone"|
+                              Feature == "corners",2,
+                            ifelse(Feature=="high_levg_sit"|
+                                     Feature=="one_one_strike"|
+                                     Feature=="first_pitch_strike"|
+                                     Feature=="third_time_order",3,
+                                   ifelse(Feature=="Swing...Miss"|
+                                            Feature=="Strikeouts"|
+                                            Feature=="chases",4,0)))))
+
+weights<-importance_matrix %>% group_by(tool) %>% 
+  summarize(sum(Gain)) %>% ungroup()
+
+weights
+```
+
+
+
+## Regressing stats on game score
+
+In order to determine how much a starting pitcher should be awarded or penalized for each event we decided to regress the variables selected for our model against gamescore 2. The reasoning is that since one of the main elements of gamescore 2 is runs, gamescore 2 is highly correlated with runs. Also we want our score to be on a similar scale to the original two gamescore models. We used a ridge regression, to determine the points to be awarded (subtracted) to the four tools score for each model. The coefficients are reported below with $\lambda\ set at the point with the minMSE and the minMSE + 1 standard error. The coefficients used for our model are those with the 1 standard error rule. 
+
+```{r}
+gamescore<-combined_data %>% filter(statcast_data<=.25) %>% 
+  select(gs2)
+
+scoring<-cbind(mod.data,gamescore) %>% select(-Runs)
+
+train.weights<-scoring[inTrain,]
+test.weights<-scoring[-inTrain,]
+
+X.tr.weights<-sparse.model.matrix(gs2~.,data=train.weights)
+X.te.weights<-sparse.model.matrix(gs2~.,data=test.weights)
+Y.tr.weights<-train.weights$gs2
+Y.te.weights<-test.weights$gs2
+
+fit.weights<-cv.glmnet(X.tr.weights,Y.tr.weights,alpha=0)
+coef(fit.weights,s=c(fit.weights$lambda.min,fit.weights$lambda.1se))
+```
+
+
+
+```{r,include=FALSE}
+##csv output
+sabr_out<-combined_data %>% select(Pitcher.ID:HRs,gs1,gs2,third_time_order,high.prob.hr.launch:barrels,chases:up_in_zone,out_of_zone,balls_in_air,statcast_data)
+
+write_excel_csv(sabr_out,"sabr_out3.csv")
+```
+
+
+# Tables and Graphics
+
+To compare the original two gamescore metrics we looked at the bottom 10 original gamescores and the top 10 original gamescores. The top 10 pitching performances were the same, although there were a few ranking differences and scoring differences across the top 10. The bottom 10 are directionally similar, but the greater penalty that gamescore 2 places on homeruns and not pitching deep into the game led to some differences between the worst performances. 
+
+```{r}
+tables<-read.csv("sabr_out4.csv")
+
+tables<-tables %>% mutate(Pitcher = paste(Name.First," ",Name.Last))
+
+comp<-tables %>% mutate(gs1.rk=rank(-gs1,ties.method = "min"),
+                  gs2.rk=rank(-gs2,ties.method = "min")) %>% 
+  select(Pitcher,Game.Date,gs1,gs1.rk,gs2,gs2.rk)
+
+
+table2<-comp %>% arrange(-gs1.rk) %>% head(10) %>% gt() %>%
+  tab_header(
+    title = md("**Bottom 10 Game Scores**"))%>% 
+  tab_spanner(
+  label=md("**Game Score v1**"),
+  columns = 3:4
+) %>% tab_spanner(
+  label=md("**Game Score v2**"),
+  columns = 5:6
+) %>% 
+  cols_label(
+    `Game.Date` = "Date",
+    `gs1` = "Score",
+    `gs1.rk` = "Rank",
+    `gs2` = "Score",
+    `gs2.rk` = "Rank"
+  ) %>% 
+  tab_source_note(source_note = "Data: Provided to Diamond Dollars Case Competition by Ben Jedlovec and his team at MLB")%>% 
+  tab_options(heading.align = "left",
+              table.border.top.color= "black",
+              column_labels.border.bottom.color = "black",
+              column_labels.border.bottom.width = px(3),
+              table_body.hlines.color = "grey") %>% 
+  data_color(
+    columns = vars(`gs1`,`gs2`),
+    colors = scales::col_numeric(c("darkred","red","pink"),
+                                 domain=NULL)
+  )
+
+
+table2
+
+```
+
+```{r}
+table1<-comp %>% arrange(gs1.rk) %>% head(10) %>% gt() %>%
+  tab_header(
+    title = md("**Top 10 Game Scores**"))%>% 
+  tab_spanner(
+  label=md("**Game Score v1**"),
+  columns = 3:4
+) %>% tab_spanner(
+  label=md("**Game Score v2**"),
+  columns = 5:6
+) %>% 
+  cols_label(
+    `Game.Date` = "Date",
+    `gs1` = "Score",
+    `gs1.rk` = "Rank",
+    `gs2` = "Score",
+    `gs2.rk` = "Rank"
+  ) %>% 
+  tab_source_note(source_note = "Data: Provided to Diamond Dollars Case Competition by Ben Jedlovec and his team at MLB")%>% 
+  tab_options(heading.align = "left",
+              table.border.top.color= "black",
+              column_labels.border.bottom.color = "black",
+              column_labels.border.bottom.width = px(3),
+              table_body.hlines.color = "grey") %>% 
+  data_color(
+    columns = vars(`gs1`,`gs2`),
+    colors = scales::col_numeric(c("white","lightgreen","green"),
+                                 domain=NULL)
+  )
+
+
+table1
+
+```
+
+
+Next we compared the top 10 four tools scores to gamescore and gamescore 2. The scores are directionally similar but their are significant differences in the rankings between the four tools metric and the two gamescores. We believe this is a good sign because our goal was to better explain the underlying pitcher performance independent of external factors not controlled for in gamescore and gamescore 2 (such as park factor, team defense, and umpires)
+
+```{r}
+comp3 <-tables %>% filter(!is.na(gs3))%>% mutate(gs1.rk=rank(-gs1,ties.method = "min"),
+                  gs2.rk=rank(-gs2,ties.method = "min"),
+                  gs3.rk=rank(-gs3,ties.method = "min")) %>% 
+  select(Pitcher,Game.Date,gs1,gs1.rk,gs2,gs2.rk,gs3,gs3.rk)
+
+full_val_range<-50:110
+
+table3<-comp3 %>% arrange(-gs3.rk) %>% head(10) %>% gt() %>%
+  tab_header(
+    title = md("**Top 10 Four Tools Scores**"))%>% 
+  tab_spanner(
+  label=md("**Game Score**"),
+  columns = 3:4
+) %>% tab_spanner(
+  label=md("**Game Score v2**"),
+  columns = 5:6
+)%>% tab_spanner(
+  label=md("**4 Tools**"),
+  columns = 7:8) %>% 
+  cols_label(
+    `Game.Date` = "Date",
+    `gs1` = "Score",
+    `gs1.rk` = "Rank",
+    `gs2` = "Score",
+    `gs2.rk` = "Rank",
+    `gs3` = "Score",
+    `gs3.rk`= "Rank"
+  ) %>% 
+  tab_source_note(source_note = "Basic gamelog Provided by Ben Jedlovec and his team at MLB; statcast data from baseballsvant.com")%>% 
+  tab_options(heading.align = "left",
+              table.border.top.color= "black",
+              column_labels.border.bottom.color = "black",
+              column_labels.border.bottom.width = px(3),
+              table_body.hlines.color = "grey") %>% 
+  data_color(
+    columns = vars(`gs1`,`gs2`,`gs3`),
+    colors = scales::col_numeric(c("yellow","lightgreen","green"), domain=full_val_range)
+  ) %>% 
+  fmt_number(
+    columns = 7,
+    decimals = 1
+  )
+
+
+gtsave(table3,"gamescorev4tools.png")
+```
+
+```{r}
+table3
+```
+
+
+```{r}
+comp3 <-tables %>% filter(!is.na(gs3))%>% 
+mutate(gs1.rk=rank(-gs1,ties.method = "min"),
+                  gs2.rk=rank(-gs2,ties.method = "min"),
+                  gs3.rk=rank(-gs3,ties.method = "min")) %>% 
+  select(Pitcher,Game.Date,gs1,gs1.rk,gs2,gs2.rk,gs3,gs3.rk)
+
+full_val_range<-comp3 %>% 
+  select(gs1,gs2,gs3) %>% 
+  range
+
+table4<-comp3 %>% arrange(gs1.rk) %>% head(5) %>% gt() %>%
+  tab_header(
+    title = md("**Top 5 Game Scores v1**"))%>% 
+  tab_spanner(
+  label=md("**Game Score**"),
+  columns = 3:4
+) %>% tab_spanner(
+  label=md("**Game Score v2**"),
+  columns = 5:6
+)%>% tab_spanner(
+  label=md("**4 Tools**"),
+  columns = 7:8) %>% 
+  cols_label(
+    `Game.Date` = "Date",
+    `gs1` = "Score",
+    `gs1.rk` = "Rank",
+    `gs2` = "Score",
+    `gs2.rk` = "Rank",
+    `gs3` = "Score",
+    `gs3.rk`= "Rank"
+  ) %>% 
+  tab_source_note(source_note = "Basic gamelog Provided by Ben Jedlovec and his team at MLB; statcast data from baseballsvant.com")%>% 
+  tab_options(heading.align = "left",
+              table.border.top.color= "black",
+              column_labels.border.bottom.color = "black",
+              column_labels.border.bottom.width = px(3),
+              table_body.hlines.color = "grey") %>% 
+  data_color(
+    columns = vars(`gs1`,`gs2`,`gs3`),
+    colors = scales::col_numeric(c("red","yellow","green"), domain=full_val_range)
+  )
+
+
+table4
+```
+
+
+The distribution of scores across each of the three scoring metrics are presented below. The four tools metric is more tightly distributed around the average than the previous two metrics and nearly every observation falls within 0-100. We believe that being on a 0-100 scale provides benefits in terms of interpretability for our metric over the previous two iterations. We also believe that the fact that the middle 50% of performance are more tightly clustered together matches our intuition that the average performances should be relatively closely scored, while outlier excellent performances and outlier terrible performance are scored far from the average on either end of the spectrum
+
+```{r}
+##box plot for game score 
+tables<-tables %>% filter(!is.na(gs3))
+
+png("boxplot.png")
+boxplot(tables$gs1,tables$gs2,tables$gs3, names = c("GS1","GS2","4 Tools"), main= "Distribution of Scores 2019",col=c("red","light green","light blue"), frame.plot=FALSE)
+dev.off()
+```
+
+```{r}
+q1<-quantile(tables$Tool.1)
+q2<-quantile(tables$Tool.2)
+q3<-quantile(tables$Tool.3)
+q4<-quantile(tables$Tool.4)
+
+tools<-data.frame(q1,q2,q3,q4)
+```
+
+
+
+
+
+```{r}
+tools %>% arrange(-q1) %>% mutate(percentiles = c("99th","75th","50th","25th","0th")) %>% gt(rowname_col = "percentiles")
+```
+
+
+```{r}
+tables %>% mutate(tool1per = percent_rank(Tool.1),
+                  tool2per = percent_rank(Tool.2),
+                  tool3per = percent_rank(Tool.3),
+                  tool4per = percent_rank(Tool.4)) %>% 
+  filter(Name.Last=="Tanaka", Game.Date=="6/17/2019") %>% 
+  select(Name.Last,Game.Date,tool1per,tool2per,tool3per,tool4per)
+```
+
+```{r}
+full.data %>% filter(player_name=="deGrom, Jacob",
+                     game_date=="2019-08-23",
+                     events=="single")
+```
+```{r}
+home<-full.data %>% select(pitcher,game_date,home_team)
+
+home<-home %>%group_by(pitcher) %>%  distinct(game_date,.keep_all = TRUE)
+
+tables<-tables %>% mutate(Game.Date=as.Date(Game.Date))
+
+parks<-tables %>% left_join(home_team,by=c("Pitcher.ID"="pitcher","Game.Date"="game_date"))
+
+parks<-parks %>% distinct(game_id,.keep_all = TRUE)
+```
+
+```{r,message=FALSE}
+parkfac<-parks %>%filter(!is.na(gs3)) %>% select(home_team,gs1,gs2,gs3)
+
+library(reshape2)
+library(ggthemes)
+d<-melt(parkfac,id.vars = "home_team")
+
+library(ggridges)
+png("parkfactor.png")
+dplot1<-d %>% filter(home_team %in% c("SF","COL"),variable=="gs1")
+
+park1<-
+  ggplot(dplot1,aes(x=value,y=home_team,fill=home_team))+
+  geom_density_ridges(quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  scale_fill_manual(values=c("purple","orange"))+
+  theme_538()+
+  theme(panel.grid.major.y = element_blank(),
+        legend.position = "none")+
+  scale_x_continuous(breaks=seq(-20,100,20))+
+  labs(
+    x="Score",
+    y= ""
+  )
+
+dplot2<-d %>% filter(home_team %in% c("SF","COL"),variable=="gs2")
+
+park2<-
+  ggplot(dplot2,aes(x=value,y=home_team,fill=home_team))+
+  geom_density_ridges(quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  scale_fill_manual(values=c("purple","orange"))+
+  theme_538()+
+  theme(panel.grid.major.y = element_blank(),
+        legend.position = "none")+
+  scale_x_continuous(breaks=seq(-20,100,20))+
+  labs(
+    x="Score",
+    y= ""
+  )
+
+
+dplot3<-d %>% filter(home_team %in% c("SF","COL"),variable=="gs3")
+
+park3<-
+  ggplot(dplot3,aes(x=value,y=home_team,fill=home_team))+
+  geom_density_ridges(quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x))+
+  scale_fill_manual(values=c("purple","orange"))+
+  theme_538()+
+  theme(panel.grid.major.y = element_blank(),
+        legend.position = "none")+
+  scale_x_continuous(breaks=seq(-20,100,20))+
+  labs(
+    x="Score",
+    y= ""
+  )
+
+gridExtra::grid.arrange(park1,park2,park3,ncol=3)
+dev.off()
+```
+
